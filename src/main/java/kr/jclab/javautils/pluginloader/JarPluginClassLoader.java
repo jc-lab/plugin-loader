@@ -9,12 +9,22 @@ import java.security.*;
 import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.stream.Collectors;
 
 public class JarPluginClassLoader extends SecureClassLoader implements Closeable {
+    public static class JarEntryWithFile {
+        public final JarFileEntry fileEntry;
+        public final JarEntry jarEntry;
+
+        public JarEntryWithFile(JarFileEntry fileEntry, JarEntry jarEntry) {
+            this.fileEntry = fileEntry;
+            this.jarEntry = jarEntry;
+        }
+    }
+
     private final Logger logger;
-    private final File file;
-    private final JarFile jarFile;
-    private final String baseUrl;
+    private final JarVerifier jarVerifier;
+    private final List<JarFileEntry> jarFiles;
 
     /**
      * The context to be used when loading classes and resources
@@ -38,7 +48,7 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         }
     }
 
-    public JarPluginClassLoader(File file, ClassLoader parent, AccessControlContext acc, Logger logger) throws IOException {
+    public JarPluginClassLoader(List<File> files, ClassLoader parent, JarVerifier jarVerifier, AccessControlContext acc, Logger logger) throws IOException, SecurityException {
         super(parent);
         checkSecurityCreateClassLoader();
 
@@ -46,26 +56,27 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
             logger = LoggerFactory.getLogger(this.getClass());
         }
         this.logger = logger;
+        this.jarVerifier = jarVerifier;
         this.acc = acc;
-        this.file = file;
-        this.jarFile = new JarFile(file);
-        this.baseUrl = "jar:" + file.toURI().toString() + "!";
+
+        ArrayList<JarFileEntry> jarFiles = new ArrayList<>();
+        jarFiles.ensureCapacity(files.size());
+        for (File file : files) {
+            JarFile jarFile = new JarFile(file);
+            jarVerifier.verify(jarFile);
+            jarFiles.add(new JarFileEntry(file, jarFile));
+        }
+        this.jarFiles = Collections.unmodifiableList(jarFiles);
 
         this.loaders = new LinkedList<>();
         this.loaders.add(new LocalLoader());
         this.loaders.add(new ParentLoader());
     }
 
-    public JarFile getJarFile() {
-        return jarFile;
-    }
-
-    public File getFile() {
-        return file;
-    }
-
-    public String getBaseUrl() {
-        return baseUrl;
+    public List<JarFileEntry> getJarFiles() {
+        return this.jarFiles.stream()
+                .map(JarFileEntry::clone)
+                .collect(Collectors.toList());
     }
 
     public final void lock() {
@@ -92,6 +103,16 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         return localLoader;
     }
 
+    private JarFileEntry findJarFileEntryByUrl(URL url) throws MalformedURLException {
+        for (JarFileEntry entry : this.jarFiles) {
+            URL entryUrl = entry.getFile().toURI().toURL();
+            if (url.equals(entryUrl)) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
     public InputStream getResourceAsStream(String name) {
         URL url = getResource(name);
         try {
@@ -101,10 +122,11 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
             URLConnection urlConnection = url.openConnection();
             if (urlConnection instanceof JarURLConnection) {
                 JarURLConnection jarURLConnection = (JarURLConnection) urlConnection;
-                if (jarURLConnection.getJarFileURL().equals(this.file.toURI().toURL())) {
-                    JarEntry jarEntry = this.jarFile.getJarEntry(jarURLConnection.getEntryName());
+                JarFileEntry jarFileEntry = this.findJarFileEntryByUrl(jarURLConnection.getJarFileURL());
+                if (jarFileEntry != null) {
+                    JarEntry jarEntry = jarFileEntry.getJarFile().getJarEntry(jarURLConnection.getEntryName());
                     if (jarEntry == null) return null;
-                    InputStream inputStream = this.jarFile.getInputStream(jarEntry);
+                    InputStream inputStream = jarFileEntry.getJarFile().getInputStream(jarEntry);
                     synchronized (closeables) {
                         closeables.put(inputStream, null);
                     }
@@ -167,7 +189,9 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
                 new PrivilegedAction<URL>() {
                     public URL run() {
                         try {
-                            return new URL(JarPluginClassLoader.this.baseUrl + name);
+                            JarEntryWithFile jarEntry = JarPluginClassLoader.this.findJarEntryByPath(name);
+                            if (jarEntry == null) return null;
+                            return new URL(jarEntry.fileEntry.getBaseUrl() + name);
                         } catch (MalformedURLException e) {
                             throw new RuntimeException(e);
                         }
@@ -222,7 +246,7 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         this.classNameReplacementChar = classNameReplacementChar;
     }
 
-    public static JarPluginClassLoader newInstance(final File file, final ClassLoader parent) throws IOException {
+    public static JarPluginClassLoader newInstance(final List<File> files, final ClassLoader parent, final JarVerifier jarVerifier) throws IOException, SecurityException {
         // Save the caller's context
         final AccessControlContext acc = AccessController.getContext();
         // Need a privileged block to create the class loader
@@ -231,7 +255,7 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
                     new PrivilegedAction<JarPluginClassLoader>() {
                         public JarPluginClassLoader run() {
                             try {
-                                return new JarPluginClassLoader(file, parent, acc, null);
+                                return new JarPluginClassLoader(files, parent, jarVerifier, acc, null);
                             } catch (IOException e) {
                                 throw new RuntimeException(e);
                             }
@@ -246,17 +270,25 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         }
     }
 
-    private JarEntry findJarEntry(String className) {
+    private JarEntryWithFile findJarEntryByPath(String name) {
+        for (JarFileEntry entry : this.jarFiles) {
+            JarEntry jarEntry = entry.getJarFile().getJarEntry(name);
+            if (jarEntry != null) return new JarEntryWithFile(entry, jarEntry);
+        }
+        return null;
+    }
+
+    private JarEntryWithFile findJarEntry(String className) {
         className = this.formatClassName(className);
-        return this.jarFile.getJarEntry(className);
+        return this.findJarEntryByPath(className);
     }
 
-    private InputStream loadJarEntryInputStream(JarEntry jarEntry) throws IOException {
-        return this.jarFile.getInputStream(jarEntry);
+    private InputStream loadJarEntryInputStream(JarEntryWithFile jarEntry) throws IOException {
+        return jarEntry.fileEntry.getJarFile().getInputStream(jarEntry.jarEntry);
     }
 
-    private byte[] loadJarEntryContent(JarEntry jarEntry) throws IOException {
-        byte[] buffer = new byte[(int)jarEntry.getSize()];
+    private byte[] loadJarEntryContent(JarEntryWithFile jarEntry) throws IOException {
+        byte[] buffer = new byte[(int)jarEntry.jarEntry.getSize()];
         int position = 0;
         int readlen;
 
@@ -277,11 +309,11 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         public final Class<?> loadClass(String className, boolean resolve) throws ClassNotFoundException {
             Class<?> clazz = classes.get(className);
             if (clazz != null) return clazz;
-            JarEntry jarEntry = JarPluginClassLoader.this.findJarEntry(className);
+            JarEntryWithFile jarEntry = JarPluginClassLoader.this.findJarEntry(className);
             if (jarEntry == null) return null;
             try {
                 byte[] classContent = JarPluginClassLoader.this.loadJarEntryContent(jarEntry);
-                ProtectionDomain protectionDomain = JarPluginClassLoader.this.getProtectionDomain(className, jarEntry);
+                ProtectionDomain protectionDomain = JarPluginClassLoader.this.getProtectionDomain(className, jarEntry.fileEntry.getJarFile(), jarEntry.jarEntry);
                 clazz = JarPluginClassLoader.this.defineClass(className, classContent, 0, classContent.length, protectionDomain);
                 if (clazz.getPackage() == null) {
                     int lastDotIndex = className.lastIndexOf('.');
@@ -302,7 +334,7 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         }
     }
 
-    protected ProtectionDomain getProtectionDomain(String className, JarEntry jarEntry) {
+    protected ProtectionDomain getProtectionDomain(String className, JarFile jarFile, JarEntry jarEntry) {
         return null;
     }
 }
