@@ -4,8 +4,8 @@ import java.io.Closeable;
 import java.io.IOException;
 
 public abstract class ProxyClassLoader implements Comparable<ProxyClassLoader>, Closeable {
-    protected int order = 5;
-    protected boolean lock = false;
+    private int order = 5;
+    private boolean lock = false;
 
     public final void lock() {
         this.lock = true;
@@ -15,7 +15,7 @@ public abstract class ProxyClassLoader implements Comparable<ProxyClassLoader>, 
         return lock;
     }
 
-    public int getOrder() {
+    public final int getOrder() {
         return order;
     }
 
