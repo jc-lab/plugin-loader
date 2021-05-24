@@ -1,11 +1,15 @@
 package kr.jclab.javautils.pluginloader;
 
-import sun.security.pkcs.PKCS7;
-import sun.security.pkcs.SignerInfo;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cms.*;
+import org.bouncycastle.cms.jcajce.JcaSimpleSignerInfoVerifierBuilder;
+import org.bouncycastle.util.Store;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.security.CodeSigner;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.*;
 import java.util.jar.JarEntry;
@@ -15,10 +19,10 @@ import java.util.regex.Pattern;
 
 public class JarVerifier {
     private static Pattern SIG_FILE_PATTERN = Pattern.compile("^META-INF\\/([^/]+)\\.(SF|RSA|EC)$", Pattern.CASE_INSENSITIVE);
-    private final CertificateVerifier certificateChainVerifier;
+    private final JarVerificationHandler jarVerificationHandler;
 
-    public JarVerifier(CertificateVerifier certificateChainVerifier) {
-        this.certificateChainVerifier = certificateChainVerifier;
+    public JarVerifier(JarVerificationHandler jarVerificationHandler) {
+        this.jarVerificationHandler = jarVerificationHandler;
     }
 
     private static class SignatureFile {
@@ -29,6 +33,33 @@ public class JarVerifier {
             this.plainFile = plainFile;
             this.signatureFile = signatureFile;
         }
+    }
+
+    private boolean verifyCmsSignedData(JarVerificationContext context, CMSSignedData signedData) throws Exception {
+        Store<X509CertificateHolder> certs = signedData.getCertificates();
+        SignerInformationStore signers = signedData.getSignerInfos();
+        CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509", BCProviderHolder.PROVIDER);
+
+        for (Iterator<SignerInformation> iterator = signers.getSigners().iterator(); iterator.hasNext(); ) {
+            SignerInformation signer = iterator.next();
+            Collection<X509CertificateHolder> certCollection = certs.getMatches(signer.getSID());
+            ArrayList<X509Certificate> chain = new ArrayList<>();
+            for (X509CertificateHolder certHolder : certCollection) {
+                chain.add((X509Certificate) certificateFactory.generateCertificate(new ByteArrayInputStream(certHolder.getEncoded())));
+            }
+            if (chain.isEmpty()) {
+                return false;
+            }
+            SignerInformationVerifier verifier = new JcaSimpleSignerInfoVerifierBuilder()
+                    .setProvider(BCProviderHolder.PROVIDER)
+                    .build(chain.get(0));
+            if (!signer.verify(verifier)) {
+                return false;
+            }
+            this.jarVerificationHandler.verify(context, chain);
+        }
+
+        return true;
     }
 
     public final void verify(JarFile jarFile) throws IOException, SecurityException {
@@ -73,6 +104,9 @@ public class JarVerifier {
             }
         }
 
+        final JarVerificationContext context = this.jarVerificationHandler.createContext();
+        this.jarVerificationHandler.start(context);
+
         for (Map.Entry<String, SignatureFile> entry : signatureFiles.entrySet()) {
             if (entry.getValue().signatureFile == null || entry.getValue().plainFile == null) {
                 throw new SecurityException("Wrong signature: " + entry.getKey());
@@ -80,24 +114,19 @@ public class JarVerifier {
             byte[] plainData = readFullyJarEntry(entry.getValue().plainFile, jarFile);
             byte[] signatureData = readFullyJarEntry(entry.getValue().signatureFile, jarFile);
             try {
-                PKCS7 block = new PKCS7(signatureData);
-                SignerInfo[] verifiedSignerInfos = block.verify(plainData);
-                if ((verifiedSignerInfos == null) || (verifiedSignerInfos.length == 0)) {
-                    throw new SecurityException("Failed to verify signature: no verified SignerInfos");
+                CMSSignedData block = new CMSSignedData(new CMSProcessableByteArray(plainData), signatureData);
+                if (!verifyCmsSignedData(context, block)) {
+                    throw new SecurityException("Failed to verify signature");
                 }
-                SignerInfo verifiedSignerInfo = verifiedSignerInfos[0];
-                final List<X509Certificate> verifiedSignerCertChain = verifiedSignerInfo.getCertificateChain(block);
-                if (verifiedSignerCertChain == null) {
-                    // Should never happen
-                    throw new SecurityException("Failed to find verified SignerInfo certificate chain");
-                } else if (verifiedSignerCertChain.isEmpty()) {
-                    // Should never happen
-                    throw new SecurityException("Verified SignerInfo certificate chain is emtpy");
-                }
-                this.certificateChainVerifier.verify(verifiedSignerCertChain);
             } catch (Exception e) {
                 throw new SecurityException(e);
             }
+        }
+
+        this.jarVerificationHandler.end(context);
+
+        if (!context.isVerified()) {
+            throw new SecurityException("Failed to verify signature");
         }
     }
 

@@ -1,0 +1,39 @@
+plugins {
+    id 'java'
+}
+
+group 'kr.jclab.javautils.test'
+version '1.0.1'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.7.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.7.0'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+task signJar(dependsOn: 'jar', description: 'to Sign JAR.', group: 'Build') {
+    doLast {
+        println "SIGNING ${name}"
+        def signdir = new File("$buildDir/libs/signed")
+        def keystore = new File("${rootDir}/src/test/resources/keystore.p12");
+        signdir.mkdirs()
+        ant.signjar(
+                destDir: "${signdir.absolutePath}",
+                jar: "$buildDir/libs/*.jar",
+                alias: 'test signer',
+                storetype: 'pkcs12',
+                keystore: "${keystore.absolutePath}",
+                storepass: '1234',
+                verbose: true,
+                preservelastmodified: 'true',
+                tsaUrl: 'http://timestamp.digicert.com'
+        )
+    }
+}

@@ -6,7 +6,7 @@ plugins {
 }
 
 group 'kr.jclab.javautils'
-version '1.0-SNAPSHOT'
+version '1.0.1-SNAPSHOT'
 
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
@@ -21,6 +21,9 @@ dependencies {
 
     // https://mvnrepository.com/artifact/org.slf4j/slf4j-api
     implementation 'org.slf4j:slf4j-api:1.7.30'
+
+    implementation 'org.bouncycastle:bcprov-jdk15on:1.68'
+    implementation 'org.bouncycastle:bcpkix-jdk15on:1.68'
 }
 
 test {
