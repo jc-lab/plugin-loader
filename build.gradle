@@ -52,14 +52,14 @@ signing {
 uploadArchives {
     repositories {
         mavenDeployer {
-            beforeDeployment { -> signing.signPom(it) }
+            beforeDeployment { MavenDeployment deployment -> signing.signPom(deployment) }
 
             repository(url: "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/") {
-                authentication(userName: hasProperty('ossrhUsername')?ossrhUsername:'', password: hasProperty('ossrhPassword')?ossrhPassword:'')
+                authentication(userName: findProperty('ossrhUsername'), password: findProperty('ossrhPassword'))
             }
 
             snapshotRepository(url: "https://s01.oss.sonatype.org/content/repositories/snapshots/") {
-                authentication(userName: hasProperty('ossrhUsername')?ossrhUsername:'', password: hasProperty('ossrhPassword')?ossrhPassword:'')
+                authentication(userName: findProperty('ossrhUsername'), password: findProperty('ossrhPassword'))
             }
 
             pom.project {
