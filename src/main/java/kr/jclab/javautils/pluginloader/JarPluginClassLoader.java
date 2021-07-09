@@ -113,7 +113,17 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         return null;
     }
 
-    public InputStream getResourceAsStream(String name) {
+    @Override
+    public URL getResource(String name) {
+        Objects.requireNonNull(name);
+        URL url = findResource(name);
+        if (url == null) {
+            url = super.getResource(name);
+        }
+        return url;
+    }
+
+	public InputStream getResourceAsStream(String name) {
         URL url = getResource(name);
         try {
             if (url == null) {
@@ -191,7 +201,9 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
                         try {
                             JarEntryWithFile jarEntry = JarPluginClassLoader.this.findJarEntryByPath(name);
                             if (jarEntry == null) return null;
-                            return new URL(jarEntry.fileEntry.getBaseUrl() + name);
+                            String absName = name;
+                            if (!absName.startsWith("/")) absName = "/" + absName;
+                            return new URL(jarEntry.fileEntry.getBaseUrl() + absName);
                         } catch (MalformedURLException e) {
                             throw new RuntimeException(e);
                         }
