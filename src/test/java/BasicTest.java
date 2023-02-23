@@ -9,8 +9,10 @@ import java.lang.reflect.Method;
 import java.net.URL;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class BasicTest {
@@ -121,5 +123,20 @@ public class BasicTest {
                 throw e;
             }
         });
+    }
+
+    @Test
+    public void testFindResources() throws Exception {
+        URL url = this.getClass().getResource("/test-component-1.0.1-nonsigned.jar");
+        File file = new File(url.getPath());
+        JarVerifier verifier = new JarVerifier(new DefaultVerificationHandler(true));
+        JarPluginClassLoader classLoader =
+                JarPluginClassLoader.newInstance(
+                        Collections.singletonList(file),
+                        this.getClass().getClassLoader(),
+                        verifier
+                );
+        List<URL> list = Collections.list(classLoader.getResources("hello/"));
+        assertEquals(list.size(), 2);
     }
 }

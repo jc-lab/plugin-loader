@@ -123,7 +123,12 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         return url;
     }
 
-	public InputStream getResourceAsStream(String name) {
+    @Override
+    protected Enumeration<URL> findResources(String name) throws IOException {
+        return new FindResourceEnumeration(name);
+    }
+
+    public InputStream getResourceAsStream(String name) {
         URL url = getResource(name);
         try {
             if (url == null) {
@@ -201,9 +206,7 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
                         try {
                             JarEntryWithFile jarEntry = JarPluginClassLoader.this.findJarEntryByPath(name);
                             if (jarEntry == null) return null;
-                            String absName = name;
-                            if (!absName.startsWith("/")) absName = "/" + absName;
-                            return new URL(jarEntry.fileEntry.getBaseUrl() + absName);
+                            return toUrl(jarEntry.fileEntry, name);
                         } catch (MalformedURLException e) {
                             throw new RuntimeException(e);
                         }
@@ -282,6 +285,12 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
         }
     }
 
+    private URL toUrl(JarFileEntry jarFileEntry, String name) throws MalformedURLException {
+        String absName = name;
+        if (!absName.startsWith("/")) absName = "/" + absName;
+        return new URL(jarFileEntry.getBaseUrl() + absName);
+    }
+
     private JarEntryWithFile findJarEntryByPath(String name) {
         for (JarFileEntry entry : this.jarFiles) {
             JarEntry jarEntry = entry.getJarFile().getJarEntry(name);
@@ -348,5 +357,63 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
 
     protected ProtectionDomain getProtectionDomain(String className, JarFile jarFile, JarEntry jarEntry) {
         return null;
+    }
+
+    private class FindResourceEnumeration implements Enumeration<URL> {
+        private final String name;
+        private final Iterator<JarFileEntry> jarFileEntryIterator;
+        private JarFileEntry jarFileEntry = null;
+        private Enumeration<JarEntry> jarEntryEnumeration = null;
+        private JarEntry next = null;
+
+
+        public FindResourceEnumeration(String name) {
+            this.name = name;
+            this.jarFileEntryIterator = getJarFiles().iterator();
+            nextJarFile();
+            nextEntry();
+        }
+
+        @Override
+        public boolean hasMoreElements() {
+            return (this.next != null);
+        }
+
+        @Override
+        public URL nextElement() {
+            try {
+                URL url = toUrl(this.jarFileEntry, this.next.getName());
+                this.next = null;
+                nextEntry();
+                return url;
+            } catch (MalformedURLException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        private void nextJarFile() {
+            if (this.jarFileEntryIterator.hasNext()) {
+                this.jarFileEntry = this.jarFileEntryIterator.next();
+                this.jarEntryEnumeration = this.jarFileEntry.getJarFile().entries();
+            } else {
+                this.jarFileEntry = null;
+                this.jarEntryEnumeration = null;
+            }
+        }
+        private void nextEntry() {
+            if (this.jarEntryEnumeration == null) {
+                return ;
+            }
+            do {
+                while (this.jarEntryEnumeration.hasMoreElements()) {
+                    JarEntry entry = this.jarEntryEnumeration.nextElement();
+                    if (entry.getName().startsWith(name)) {
+                        this.next = entry;
+                        return ;
+                    }
+                }
+                nextJarFile();
+            } while (this.jarFileEntry != null);
+        }
     }
 }
