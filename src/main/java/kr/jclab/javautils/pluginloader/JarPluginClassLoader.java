@@ -339,9 +339,14 @@ public class JarPluginClassLoader extends SecureClassLoader implements Closeable
                 if (clazz.getPackage() == null) {
                     int lastDotIndex = className.lastIndexOf('.');
                     String packageName = lastDotIndex >= 0 ? className.substring(0, lastDotIndex) : "";
-                    JarPluginClassLoader.this.definePackage(packageName, (String)null, (String)null, (String)null, (String)null, (String)null, (String)null, (URL)null);
+                    JarPluginClassLoader.this.definePackage(packageName, (String) null, (String) null, (String) null, (String) null, (String) null, (String) null, (URL) null);
                 }
+                classes.put(className, clazz);
                 return clazz;
+            } catch (LinkageError e) {
+                clazz = classes.get(className);
+                if (clazz != null) return clazz;
+                throw new ClassNotFoundException("nested", e);
             } catch (Throwable e) {
                 throw new ClassNotFoundException("nested", e);
             }
