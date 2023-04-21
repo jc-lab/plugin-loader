@@ -6,4 +6,4 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: sudo apt-get update && sudo apt-get install -y openjdk-11-jdk-headless
-      - run: chmod +x ./gradlew && ./gradlew
+      - run: chmod +x ./gradlew && ./gradlew :test
